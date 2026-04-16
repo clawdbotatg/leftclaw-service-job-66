@@ -1,156 +1,327 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAddress } from "viem";
+import {
+  CLAWDPFP_ABI,
+  CLAWDPFP_ADDRESS,
+  MINT_CV_COST,
+  MIN_RELAYER_ETH,
+  bgipfsAddBytes,
+  bgipfsAddJson,
+  bgipfsGatewayUrl,
+  getCvBalance,
+  getPublicClient,
+  getRelayerAccount,
+  getWalletClient,
+  parseImageDataUrl,
+  parseTokenIdFromReceiptLogs,
+  spendCv,
+} from "~~/lib/server/pfpApi";
 
-// In-memory rate limiting (resets on server restart)
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+// Minting involves two IPFS uploads + a mainnet tx — allow longer than default.
+export const maxDuration = 120;
+
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT_MAX = 3;
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
-const MINT_CV_COST = 1_000_000;
-// Minimum ETH the relayer needs to pay gas. Used in preflight checks.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const _MIN_RELAYER_ETH_BALANCE = 0.05; // ETH
-
 function checkRateLimit(wallet: string): { allowed: boolean; retryAfterMs?: number } {
   const now = Date.now();
-  const entry = rateLimitMap.get(wallet.toLowerCase());
-
+  const key = wallet.toLowerCase();
+  const entry = rateLimitMap.get(key);
   if (!entry || now > entry.resetAt) {
-    rateLimitMap.set(wallet.toLowerCase(), { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    rateLimitMap.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
     return { allowed: true };
   }
-
   if (entry.count >= RATE_LIMIT_MAX) {
     return { allowed: false, retryAfterMs: entry.resetAt - now };
   }
-
   entry.count += 1;
   return { allowed: true };
 }
 
+function decrementRateLimit(wallet: string) {
+  const entry = rateLimitMap.get(wallet.toLowerCase());
+  if (entry && entry.count > 0) entry.count -= 1;
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const body = (await request.json().catch(() => ({}))) as {
+      wallet?: string;
+      imageDataUrl?: string;
+      prompt?: string;
+      signature?: string;
+    };
     const { wallet, imageDataUrl, prompt, signature } = body;
 
-    // --- Validate inputs ---
+    // --- Validate ---
     if (!wallet || !isAddress(wallet)) {
       return NextResponse.json({ error: "Invalid wallet address" }, { status: 400 });
     }
-    if (!imageDataUrl || typeof imageDataUrl !== "string") {
-      return NextResponse.json({ error: "Image data is required" }, { status: 400 });
+    if (!imageDataUrl || typeof imageDataUrl !== "string" || !imageDataUrl.startsWith("data:image/")) {
+      return NextResponse.json({ error: "Image data URL is required" }, { status: 400 });
     }
     if (!prompt || typeof prompt !== "string" || prompt.length === 0 || prompt.length > 280) {
       return NextResponse.json({ error: "Prompt must be 1-280 characters" }, { status: 400 });
     }
-    if (!signature || typeof signature !== "string") {
-      return NextResponse.json({ error: "Signature is required" }, { status: 400 });
+    if (!signature || typeof signature !== "string" || !/^0x[0-9a-fA-F]+$/.test(signature)) {
+      return NextResponse.json({ error: "Signature is required and must be hex" }, { status: 400 });
     }
 
-    // --- Strip HTML/script tags from prompt ---
-    // Used in metadata JSON when IPFS pinning is enabled
-    const _sanitizedPrompt = prompt.replace(/<[^>]*>/g, "").trim();
-    void _sanitizedPrompt; // Will be used when TODO stubs are replaced
+    const sanitizedPrompt = prompt.replace(/<[^>]*>/g, "").trim();
+    if (sanitizedPrompt.length === 0) {
+      return NextResponse.json({ error: "Prompt cannot be empty after sanitization" }, { status: 400 });
+    }
 
-    // --- Rate limit check ---
+    // --- Decode image early so we fail fast on bad payloads. ---
+    let imageBuffer: Buffer;
+    let imageContentType: string;
+    try {
+      const parsed = parseImageDataUrl(imageDataUrl);
+      imageBuffer = parsed.buffer;
+      imageContentType = parsed.contentType;
+    } catch {
+      return NextResponse.json({ error: "Image data URL could not be decoded" }, { status: 400 });
+    }
+    // Reject images that are suspiciously large or empty. Base PFP is ~200 KB.
+    if (imageBuffer.length === 0 || imageBuffer.length > 5 * 1024 * 1024) {
+      return NextResponse.json({ error: "Image payload invalid (empty or >5 MB)" }, { status: 400 });
+    }
+
+    // --- Rate limit ---
     const rateCheck = checkRateLimit(wallet);
     if (!rateCheck.allowed) {
       const retryAfterSec = Math.ceil((rateCheck.retryAfterMs || 0) / 1000);
       return NextResponse.json(
-        { error: `Rate limit exceeded. Try again in ${Math.ceil(retryAfterSec / 60)} minutes.` },
+        {
+          error: `Rate limit exceeded. Try again in ${Math.ceil(retryAfterSec / 60)} minutes.`,
+          retryAfterSec,
+        },
         { status: 429 },
       );
     }
 
-    // --- Preflight: Check relayer ETH balance on mainnet ---
-    // TODO: Uncomment when deploying
-    // const alchemyRpc = `https://eth-mainnet.g.alchemy.com/v2/${process.env.NEXT_PUBLIC_ALCHEMY_API_KEY}`;
-    // const publicClient = createPublicClient({ chain: mainnet, transport: http(alchemyRpc) });
-    // const relayerAddress = privateKeyToAddress(process.env.RELAYER_PRIVATE_KEY as `0x${string}`);
-    // const relayerBalance = await publicClient.getBalance({ address: relayerAddress });
-    // if (Number(formatEther(relayerBalance)) < MIN_RELAYER_ETH_BALANCE) {
-    //   return NextResponse.json(
-    //     { error: "Minting temporarily unavailable", reason: "relayer_low_balance" },
-    //     { status: 503 },
-    //   );
-    // }
+    const publicClient = getPublicClient();
 
-    // --- Check mintDeadline (with 5-minute grace period) ---
-    // TODO: Read mintDeadline from contract
-    // const mintDeadline = await publicClient.readContract({ ... });
-    // const nowSec = BigInt(Math.floor(Date.now() / 1000));
-    // const gracePeriod = BigInt(5 * 60); // 5 minutes
-    // if (nowSec > mintDeadline - gracePeriod) {
-    //   return NextResponse.json({ error: "Minting window has closed" }, { status: 410 });
-    // }
+    // --- Preflight: mintDeadline ---
+    let mintDeadline: bigint;
+    try {
+      mintDeadline = (await publicClient.readContract({
+        address: CLAWDPFP_ADDRESS,
+        abi: CLAWDPFP_ABI,
+        functionName: "mintDeadline",
+      })) as bigint;
+    } catch (err) {
+      console.error("mintDeadline read failed:", err);
+      decrementRateLimit(wallet);
+      return NextResponse.json({ error: "Could not verify mint deadline. Try again shortly." }, { status: 503 });
+    }
+    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+    // 60s grace: don't start a mint we know we can't confirm before the deadline.
+    if (nowSec + 60n >= mintDeadline) {
+      decrementRateLimit(wallet);
+      return NextResponse.json({ error: "The CLAWD PFP minting window has closed." }, { status: 410 });
+    }
 
-    // --- Check CV balance ---
-    // TODO: GET https://larv.ai/api/cv/balance?address={wallet}
-    // if (balance < MINT_CV_COST) return 402
+    // --- Preflight: relayer balance ---
+    let relayerAccount;
+    try {
+      relayerAccount = getRelayerAccount();
+    } catch (err) {
+      console.error("relayer account init failed:", err);
+      decrementRateLimit(wallet);
+      return NextResponse.json({ error: "Minting temporarily unavailable (relayer not configured)." }, { status: 503 });
+    }
+    const relayerBalance = await publicClient.getBalance({ address: relayerAccount.address });
+    if (relayerBalance < MIN_RELAYER_ETH) {
+      decrementRateLimit(wallet);
+      return NextResponse.json(
+        {
+          error: "Minting temporarily unavailable (relayer low on gas).",
+          reason: "relayer_low_balance",
+        },
+        { status: 503 },
+      );
+    }
 
-    // --- Pin image to IPFS ---
-    // TODO: Decode base64 image, pin to IPFS via Pinata or bgipfs
-    // const imageBuffer = Buffer.from(imageDataUrl.split(",")[1], "base64");
-    // const imageCID = await pinata.pinFileToIPFS(imageBuffer, { pinataMetadata: { name: `clawd-pfp-image` } });
-    // const imageURI = `ipfs://${imageCID.IpfsHash}`;
+    // --- Preflight: CV balance ---
+    const balance = await getCvBalance(wallet);
+    if (balance.balance < MINT_CV_COST) {
+      decrementRateLimit(wallet);
+      return NextResponse.json(
+        {
+          error: `Insufficient CV. Need ${MINT_CV_COST.toLocaleString()} CV, have ${balance.balance.toLocaleString()}.`,
+          currentBalance: balance.balance,
+          required: MINT_CV_COST,
+        },
+        { status: 402 },
+      );
+    }
 
-    // --- Build and pin metadata JSON ---
-    // TODO: Read _tokenIdCounter from contract to predict tokenId
-    // const tokenId = await publicClient.readContract({ functionName: "_tokenIdCounter" });
-    // const metadata = {
-    //   name: `CLAWD PFP #${tokenId}`,
-    //   description: `Custom CLAWD PFP: ${sanitizedPrompt}`,
-    //   image: imageURI,
-    //   attributes: [
-    //     { trait_type: "Prompt", value: sanitizedPrompt },
-    //     { trait_type: "Minted By", value: wallet },
-    //   ],
-    // };
-    // const metadataCID = await pinata.pinJSONToIPFS(metadata);
-    // const tokenURI = `ipfs://${metadataCID.IpfsHash}`;
+    // --- Predict the upcoming tokenId (best-effort, for metadata name) ---
+    let predictedTokenId: bigint | null = null;
+    try {
+      predictedTokenId = (await publicClient.readContract({
+        address: CLAWDPFP_ADDRESS,
+        abi: CLAWDPFP_ABI,
+        functionName: "totalSupply",
+      })) as bigint;
+    } catch {
+      predictedTokenId = null;
+    }
 
-    // --- Charge CV (after IPFS pinning succeeds) ---
-    // TODO: POST https://larv.ai/api/cv/spend
-    // const chargeRes = await fetch("https://larv.ai/api/cv/spend", { ... });
-    // if (!chargeRes.ok) return 500;
+    // --- Charge CV FIRST (user-facing failures here mean no IPFS/tx cost) ---
+    const charge = await spendCv({ wallet, amount: MINT_CV_COST, signature });
+    if (!charge.ok) {
+      decrementRateLimit(wallet);
+      return NextResponse.json(
+        {
+          error: `CV charge failed: ${charge.error || "unknown"}`,
+        },
+        { status: charge.status === 402 ? 402 : 502 },
+      );
+    }
 
-    // --- Simulate mint transaction ---
-    // TODO: Simulate before sending to catch reverts
-    // await publicClient.simulateContract({
-    //   address: contractAddress,
-    //   abi: ClawdPFPAbi,
-    //   functionName: "mint",
-    //   args: [wallet, tokenURI],
-    //   account: relayerAddress,
-    // });
+    // From this point on we've taken the user's CV. Any failure needs to be
+    // logged so it can be reconciled manually (larv.ai doesn't support
+    // programmatic refunds). We still report a graceful error to the user.
+    const logCvCharged = (detail: string) =>
+      console.error(
+        `[MINT_RECONCILE] wallet=${wallet} charged=${MINT_CV_COST} CV but ${detail}. Manual refund required.`,
+      );
 
-    // --- Send mint transaction from relayer wallet ---
-    // TODO: Create walletClient with relayer private key and call mint()
-    // const walletClient = createWalletClient({
-    //   account: privateKeyToAccount(process.env.RELAYER_PRIVATE_KEY),
-    //   chain: mainnet,
-    //   transport: http(alchemyRpc),
-    // });
-    // const txHash = await walletClient.writeContract({
-    //   address: contractAddress,
-    //   abi: ClawdPFPAbi,
-    //   functionName: "mint",
-    //   args: [wallet, tokenURI],
-    // });
-    // const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+    // --- Pin image to BGIPFS ---
+    let imageCid: string;
+    try {
+      const upload = await bgipfsAddBytes(
+        imageBuffer,
+        `clawd-pfp.${imageContentType.split("/")[1] || "png"}`,
+        imageContentType,
+      );
+      imageCid = upload.cid;
+    } catch (err) {
+      logCvCharged(`BGIPFS image upload failed: ${(err as Error).message}`);
+      return NextResponse.json(
+        {
+          error: "Image pinning failed after CV was charged. Please contact support for a refund.",
+          reconcile: { wallet, amount: MINT_CV_COST },
+        },
+        { status: 502 },
+      );
+    }
 
-    // --- STUB: Return mock data for now ---
-    const mockTxHash = "0x" + "a".repeat(64);
-    const mockTokenId = 0;
-    const mockTokenURI = "ipfs://QmMockMetadataHash";
+    // --- Build + pin metadata JSON ---
+    const imageGatewayUrl = bgipfsGatewayUrl(imageCid);
+    const metadataName = predictedTokenId !== null ? `CLAWD PFP #${predictedTokenId.toString()}` : "CLAWD PFP";
+    const metadata = {
+      name: metadataName,
+      description: sanitizedPrompt,
+      image: imageGatewayUrl,
+      external_url: "https://leftclaw.services",
+      attributes: [
+        { trait_type: "Prompt", value: sanitizedPrompt },
+        { trait_type: "Minted By", value: wallet },
+      ],
+    };
+    let metadataCid: string;
+    try {
+      const upload = await bgipfsAddJson(metadata, "metadata.json");
+      metadataCid = upload.cid;
+    } catch (err) {
+      logCvCharged(`BGIPFS metadata upload failed: ${(err as Error).message}`);
+      return NextResponse.json(
+        {
+          error: "Metadata pinning failed after CV was charged. Please contact support for a refund.",
+          reconcile: { wallet, amount: MINT_CV_COST, imageCid },
+        },
+        { status: 502 },
+      );
+    }
+    const metadataURI = bgipfsGatewayUrl(metadataCid);
+
+    // --- Simulate the mint before sending ---
+    try {
+      await publicClient.simulateContract({
+        account: relayerAccount.address,
+        address: CLAWDPFP_ADDRESS,
+        abi: CLAWDPFP_ABI,
+        functionName: "mint",
+        args: [wallet as `0x${string}`, metadataURI],
+      });
+    } catch (err) {
+      logCvCharged(`mint simulation reverted: ${(err as Error).message}`);
+      return NextResponse.json(
+        {
+          error: "Mint simulation failed. Your CV has been charged — please contact support.",
+          reconcile: { wallet, amount: MINT_CV_COST, imageCid, metadataCid },
+        },
+        { status: 502 },
+      );
+    }
+
+    // --- Send mint tx from relayer ---
+    let txHash: `0x${string}`;
+    try {
+      const walletClient = getWalletClient();
+      txHash = await walletClient.writeContract({
+        address: CLAWDPFP_ADDRESS,
+        abi: CLAWDPFP_ABI,
+        functionName: "mint",
+        args: [wallet as `0x${string}`, metadataURI],
+        chain: walletClient.chain,
+        account: walletClient.account,
+      });
+    } catch (err) {
+      logCvCharged(`mint write failed: ${(err as Error).message}`);
+      return NextResponse.json(
+        {
+          error: "Mint transaction failed to submit. Your CV has been charged — please contact support.",
+          reconcile: { wallet, amount: MINT_CV_COST, imageCid, metadataCid },
+        },
+        { status: 502 },
+      );
+    }
+
+    // --- Wait for receipt + parse tokenId ---
+    let tokenIdFromReceipt: bigint | null = null;
+    try {
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 90_000 });
+      if (receipt.status !== "success") {
+        logCvCharged(`mint tx reverted on-chain (${txHash})`);
+        return NextResponse.json(
+          {
+            error: "Mint transaction reverted on-chain. Your CV has been charged — please contact support.",
+            txHash,
+            reconcile: { wallet, amount: MINT_CV_COST, imageCid, metadataCid, txHash },
+          },
+          { status: 502 },
+        );
+      }
+      tokenIdFromReceipt = parseTokenIdFromReceiptLogs(receipt.logs);
+    } catch (err) {
+      // Tx is broadcast; we just couldn't wait for the receipt. Return what
+      // we have — the frontend can still show the Etherscan link.
+      console.error("waitForTransactionReceipt failed:", err);
+    }
+
+    const finalTokenId =
+      tokenIdFromReceipt !== null
+        ? Number(tokenIdFromReceipt)
+        : predictedTokenId !== null
+          ? Number(predictedTokenId)
+          : null;
 
     return NextResponse.json({
-      txHash: mockTxHash,
-      tokenId: mockTokenId,
-      tokenURI: mockTokenURI,
-      ipfsImageUrl: "ipfs://QmMockImageHash",
+      txHash,
+      tokenId: finalTokenId,
+      tokenURI: metadataURI,
+      imageCid,
+      metadataCid,
+      imageUrl: imageGatewayUrl,
       cvSpent: MINT_CV_COST,
-      newBalance: 1_000_000, // TODO: Read actual updated balance
+      newBalance: charge.newBalance,
     });
   } catch (error) {
     console.error("Mint API error:", error);

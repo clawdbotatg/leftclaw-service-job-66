@@ -12,7 +12,7 @@ import { useTargetNetwork } from "~~/hooks/scaffold-eth/useTargetNetwork";
 import { notification } from "~~/utils/scaffold-eth";
 
 const GENERATE_CV_COST = 500_000;
-const MINT_CV_COST = 1_000_000;
+const MINT_CV_COST = 5_000_000;
 
 const Home: NextPage = () => {
   const { address: connectedAddress, isConnected, chain } = useAccount();
