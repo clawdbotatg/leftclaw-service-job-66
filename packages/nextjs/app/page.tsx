@@ -180,11 +180,21 @@ const Home: NextPage = () => {
   return (
     <div className="flex items-center flex-col grow pt-10 pb-8">
       <div className="px-5 w-full max-w-2xl">
-        {/* Title and description */}
+        {/* Description */}
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold mb-2">CLAWD PFP Generator</h1>
           <p className="text-base-content/70 max-w-md mx-auto">
-            Create a custom CLAWD lobster PFP and mint it as an NFT on Ethereum. No gas needed &mdash; we cover it.
+            Create a custom CLAWD lobster PFP and mint it as a gasless NFT on Ethereum.
+          </p>
+          <p className="text-sm text-base-content/60 max-w-md mx-auto mt-3">
+            Powered by the{" "}
+            <a href="https://leftclaw.services" target="_blank" rel="noopener noreferrer" className="link link-hover">
+              leftclaw.services
+            </a>{" "}
+            pipeline. Minting uses CV earned from staking{" "}
+            <a href="https://larv.ai" target="_blank" rel="noopener noreferrer" className="link link-hover">
+              $CLAWD on larv.ai
+            </a>
+            .
           </p>
         </div>
 
