@@ -21,3 +21,6 @@ node_modules
 
 # cli
 dist
+
+# bgipfs config (contains API key)
+ipfs-upload.config.json
