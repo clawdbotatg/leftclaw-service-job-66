@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { getRandomSurprisePrompt } from "~~/lib/surpriseMePrompts";
 
 type GenerateFormProps = {
@@ -12,8 +12,25 @@ type GenerateFormProps = {
 
 const MAX_PROMPT_LENGTH = 280;
 
+const GENERATE_ETA_MS = 30_000;
+
 export const GenerateForm = ({ onGenerate, isGenerating, disabled, disabledReason }: GenerateFormProps) => {
   const [prompt, setPrompt] = useState("");
+  const [elapsedMs, setElapsedMs] = useState(0);
+
+  useEffect(() => {
+    if (!isGenerating) {
+      setElapsedMs(0);
+      return;
+    }
+    const start = Date.now();
+    const id = setInterval(() => setElapsedMs(Date.now() - start), 200);
+    return () => clearInterval(id);
+  }, [isGenerating]);
+
+  // Cap visual progress at 95% so it doesn't look "done" before the request resolves
+  const progressPct = Math.min(95, (elapsedMs / GENERATE_ETA_MS) * 100);
+  const secondsElapsed = Math.floor(elapsedMs / 1000);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -79,7 +96,19 @@ export const GenerateForm = ({ onGenerate, isGenerating, disabled, disabledReaso
       </button>
 
       {isGenerating && (
-        <p className="text-sm text-base-content/60 text-center mt-2">This usually takes 10-30 seconds</p>
+        <div className="mt-3">
+          <div className="h-2 w-full rounded-full bg-base-300 overflow-hidden">
+            <div
+              className="h-full bg-primary transition-[width] duration-200 ease-linear"
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
+          <p className="text-sm text-base-content/60 text-center mt-2">
+            {secondsElapsed < 30
+              ? `Generating... ${secondsElapsed}s / ~30s`
+              : `Still working... ${secondsElapsed}s (sometimes takes a bit longer)`}
+          </p>
+        </div>
       )}
     </form>
   );
