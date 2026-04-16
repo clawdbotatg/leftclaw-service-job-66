@@ -7,13 +7,21 @@ import { GenericContractsDeclaration } from "~~/utils/scaffold-eth/contract";
 const deployedContracts = {
   1: {
     ClawdPFP: {
-      address: "0x0000000000000000000000000000000000000000",
+      address: "0xb5741b033c45330a34952436a34b1b25a208af10",
       abi: [
         {
           type: "constructor",
           inputs: [
-            { name: "_minter", type: "address", internalType: "address" },
-            { name: "_mintDuration", type: "uint256", internalType: "uint256" },
+            {
+              name: "_minter",
+              type: "address",
+              internalType: "address",
+            },
+            {
+              name: "_mintDuration",
+              type: "uint256",
+              internalType: "uint256",
+            },
           ],
           stateMutability: "nonpayable",
         },
@@ -21,8 +29,16 @@ const deployedContracts = {
           type: "function",
           name: "approve",
           inputs: [
-            { name: "to", type: "address", internalType: "address" },
-            { name: "tokenId", type: "uint256", internalType: "uint256" },
+            {
+              name: "to",
+              type: "address",
+              internalType: "address",
+            },
+            {
+              name: "tokenId",
+              type: "uint256",
+              internalType: "uint256",
+            },
           ],
           outputs: [],
           stateMutability: "nonpayable",
@@ -30,33 +46,79 @@ const deployedContracts = {
         {
           type: "function",
           name: "balanceOf",
-          inputs: [{ name: "owner", type: "address", internalType: "address" }],
-          outputs: [{ name: "", type: "uint256", internalType: "uint256" }],
+          inputs: [
+            {
+              name: "owner",
+              type: "address",
+              internalType: "address",
+            },
+          ],
+          outputs: [
+            {
+              name: "",
+              type: "uint256",
+              internalType: "uint256",
+            },
+          ],
           stateMutability: "view",
         },
         {
           type: "function",
           name: "getApproved",
-          inputs: [{ name: "tokenId", type: "uint256", internalType: "uint256" }],
-          outputs: [{ name: "", type: "address", internalType: "address" }],
+          inputs: [
+            {
+              name: "tokenId",
+              type: "uint256",
+              internalType: "uint256",
+            },
+          ],
+          outputs: [
+            {
+              name: "",
+              type: "address",
+              internalType: "address",
+            },
+          ],
           stateMutability: "view",
         },
         {
           type: "function",
           name: "isApprovedForAll",
           inputs: [
-            { name: "owner", type: "address", internalType: "address" },
-            { name: "operator", type: "address", internalType: "address" },
+            {
+              name: "owner",
+              type: "address",
+              internalType: "address",
+            },
+            {
+              name: "operator",
+              type: "address",
+              internalType: "address",
+            },
           ],
-          outputs: [{ name: "", type: "bool", internalType: "bool" }],
+          outputs: [
+            {
+              name: "",
+              type: "bool",
+              internalType: "bool",
+            },
+          ],
           stateMutability: "view",
         },
         {
           type: "function",
           name: "mint",
           inputs: [
-            { name: "to", type: "address", internalType: "address" },
-            { name: "_tokenURI", type: "string", internalType: "string" },
+            {
+              name: "to",
+              type: "address",
+              internalType: "address",
+            },
+            {
+              name: "_tokenURI",
+              type: "string",
+              internalType: "string",
+            },
           ],
           outputs: [],
           stateMutability: "nonpayable",
@@ -65,37 +127,79 @@ const deployedContracts = {
           type: "function",
           name: "mintDeadline",
           inputs: [],
-          outputs: [{ name: "", type: "uint256", internalType: "uint256" }],
+          outputs: [
+            {
+              name: "",
+              type: "uint256",
+              internalType: "uint256",
+            },
+          ],
           stateMutability: "view",
         },
         {
           type: "function",
           name: "minter",
           inputs: [],
-          outputs: [{ name: "", type: "address", internalType: "address" }],
+          outputs: [
+            {
+              name: "",
+              type: "address",
+              internalType: "address",
+            },
+          ],
           stateMutability: "view",
         },
         {
           type: "function",
           name: "name",
           inputs: [],
-          outputs: [{ name: "", type: "string", internalType: "string" }],
+          outputs: [
+            {
+              name: "",
+              type: "string",
+              internalType: "string",
+            },
+          ],
           stateMutability: "view",
         },
         {
           type: "function",
           name: "ownerOf",
-          inputs: [{ name: "tokenId", type: "uint256", internalType: "uint256" }],
-          outputs: [{ name: "", type: "address", internalType: "address" }],
+          inputs: [
+            {
+              name: "tokenId",
+              type: "uint256",
+              internalType: "uint256",
+            },
+          ],
+          outputs: [
+            {
+              name: "",
+              type: "address",
+              internalType: "address",
+            },
+          ],
           stateMutability: "view",
         },
         {
           type: "function",
           name: "safeTransferFrom",
           inputs: [
-            { name: "from", type: "address", internalType: "address" },
-            { name: "to", type: "address", internalType: "address" },
-            { name: "tokenId", type: "uint256", internalType: "uint256" },
+            {
+              name: "from",
+              type: "address",
+              internalType: "address",
+            },
+            {
+              name: "to",
+              type: "address",
+              internalType: "address",
+            },
+            {
+              name: "tokenId",
+              type: "uint256",
+              internalType: "uint256",
+            },
           ],
           outputs: [],
           stateMutability: "nonpayable",
@@ -104,10 +208,26 @@ const deployedContracts = {
           type: "function",
           name: "safeTransferFrom",
           inputs: [
-            { name: "from", type: "address", internalType: "address" },
-            { name: "to", type: "address", internalType: "address" },
-            { name: "tokenId", type: "uint256", internalType: "uint256" },
-            { name: "data", type: "bytes", internalType: "bytes" },
+            {
+              name: "from",
+              type: "address",
+              internalType: "address",
+            },
+            {
+              name: "to",
+              type: "address",
+              internalType: "address",
+            },
+            {
+              name: "tokenId",
+              type: "uint256",
+              internalType: "uint256",
+            },
+            {
+              name: "data",
+              type: "bytes",
+              internalType: "bytes",
+            },
           ],
           outputs: [],
           stateMutability: "nonpayable",
@@ -116,8 +236,16 @@ const deployedContracts = {
           type: "function",
           name: "setApprovalForAll",
           inputs: [
-            { name: "operator", type: "address", internalType: "address" },
-            { name: "approved", type: "bool", internalType: "bool" },
+            {
+              name: "operator",
+              type: "address",
+              internalType: "address",
+            },
+            {
+              name: "approved",
+              type: "bool",
+              internalType: "bool",
+            },
           ],
           outputs: [],
           stateMutability: "nonpayable",
@@ -125,31 +253,73 @@ const deployedContracts = {
         {
           type: "function",
           name: "supportsInterface",
-          inputs: [{ name: "interfaceId", type: "bytes4", internalType: "bytes4" }],
-          outputs: [{ name: "", type: "bool", internalType: "bool" }],
+          inputs: [
+            {
+              name: "interfaceId",
+              type: "bytes4",
+              internalType: "bytes4",
+            },
+          ],
+          outputs: [
+            {
+              name: "",
+              type: "bool",
+              internalType: "bool",
+            },
+          ],
           stateMutability: "view",
         },
         {
           type: "function",
           name: "symbol",
           inputs: [],
-          outputs: [{ name: "", type: "string", internalType: "string" }],
+          outputs: [
+            {
+              name: "",
+              type: "string",
+              internalType: "string",
+            },
+          ],
           stateMutability: "view",
         },
         {
           type: "function",
           name: "tokenURI",
-          inputs: [{ name: "tokenId", type: "uint256", internalType: "uint256" }],
-          outputs: [{ name: "", type: "string", internalType: "string" }],
+          inputs: [
+            {
+              name: "tokenId",
+              type: "uint256",
+              internalType: "uint256",
+            },
+          ],
+          outputs: [
+            {
+              name: "",
+              type: "string",
+              internalType: "string",
+            },
+          ],
           stateMutability: "view",
         },
         {
           type: "function",
           name: "transferFrom",
           inputs: [
-            { name: "from", type: "address", internalType: "address" },
-            { name: "to", type: "address", internalType: "address" },
-            { name: "tokenId", type: "uint256", internalType: "uint256" },
+            {
+              name: "from",
+              type: "address",
+              internalType: "address",
+            },
+            {
+              name: "to",
+              type: "address",
+              internalType: "address",
+            },
+            {
+              name: "tokenId",
+              type: "uint256",
+              internalType: "uint256",
+            },
           ],
           outputs: [],
           stateMutability: "nonpayable",
@@ -158,9 +328,24 @@ const deployedContracts = {
           type: "event",
           name: "Approval",
           inputs: [
-            { name: "owner", type: "address", indexed: true, internalType: "address" },
-            { name: "approved", type: "address", indexed: true, internalType: "address" },
-            { name: "tokenId", type: "uint256", indexed: true, internalType: "uint256" },
+            {
+              name: "owner",
+              type: "address",
+              indexed: true,
+              internalType: "address",
+            },
+            {
+              name: "approved",
+              type: "address",
+              indexed: true,
+              internalType: "address",
+            },
+            {
+              name: "tokenId",
+              type: "uint256",
+              indexed: true,
+              internalType: "uint256",
+            },
           ],
           anonymous: false,
         },
@@ -168,9 +353,24 @@ const deployedContracts = {
           type: "event",
           name: "ApprovalForAll",
           inputs: [
-            { name: "owner", type: "address", indexed: true, internalType: "address" },
-            { name: "operator", type: "address", indexed: true, internalType: "address" },
-            { name: "approved", type: "bool", indexed: false, internalType: "bool" },
+            {
+              name: "owner",
+              type: "address",
+              indexed: true,
+              internalType: "address",
+            },
+            {
+              name: "operator",
+              type: "address",
+              indexed: true,
+              internalType: "address",
+            },
+            {
+              name: "approved",
+              type: "bool",
+              indexed: false,
+              internalType: "bool",
+            },
           ],
           anonymous: false,
         },
@@ -178,9 +378,24 @@ const deployedContracts = {
           type: "event",
           name: "PFPMinted",
           inputs: [
-            { name: "tokenId", type: "uint256", indexed: true, internalType: "uint256" },
-            { name: "to", type: "address", indexed: true, internalType: "address" },
-            { name: "tokenURI", type: "string", indexed: false, internalType: "string" },
+            {
+              name: "tokenId",
+              type: "uint256",
+              indexed: true,
+              internalType: "uint256",
+            },
+            {
+              name: "to",
+              type: "address",
+              indexed: true,
+              internalType: "address",
+            },
+            {
+              name: "tokenURI",
+              type: "string",
+              indexed: false,
+              internalType: "string",
+            },
           ],
           anonymous: false,
         },
@@ -188,65 +403,158 @@ const deployedContracts = {
           type: "event",
           name: "Transfer",
           inputs: [
-            { name: "from", type: "address", indexed: true, internalType: "address" },
-            { name: "to", type: "address", indexed: true, internalType: "address" },
-            { name: "tokenId", type: "uint256", indexed: true, internalType: "uint256" },
+            {
+              name: "from",
+              type: "address",
+              indexed: true,
+              internalType: "address",
+            },
+            {
+              name: "to",
+              type: "address",
+              indexed: true,
+              internalType: "address",
+            },
+            {
+              name: "tokenId",
+              type: "uint256",
+              indexed: true,
+              internalType: "uint256",
+            },
           ],
           anonymous: false,
         },
         {
           type: "error",
+          name: "DurationTooShort",
+          inputs: [],
+        },
+        {
+          type: "error",
           name: "ERC721IncorrectOwner",
           inputs: [
-            { name: "sender", type: "address", internalType: "address" },
-            { name: "tokenId", type: "uint256", internalType: "uint256" },
-            { name: "owner", type: "address", internalType: "address" },
+            {
+              name: "sender",
+              type: "address",
+              internalType: "address",
+            },
+            {
+              name: "tokenId",
+              type: "uint256",
+              internalType: "uint256",
+            },
+            {
+              name: "owner",
+              type: "address",
+              internalType: "address",
+            },
           ],
         },
         {
           type: "error",
           name: "ERC721InsufficientApproval",
           inputs: [
-            { name: "operator", type: "address", internalType: "address" },
-            { name: "tokenId", type: "uint256", internalType: "uint256" },
+            {
+              name: "operator",
+              type: "address",
+              internalType: "address",
+            },
+            {
+              name: "tokenId",
+              type: "uint256",
+              internalType: "uint256",
+            },
           ],
         },
         {
           type: "error",
           name: "ERC721InvalidApprover",
-          inputs: [{ name: "approver", type: "address", internalType: "address" }],
+          inputs: [
+            {
+              name: "approver",
+              type: "address",
+              internalType: "address",
+            },
+          ],
         },
         {
           type: "error",
           name: "ERC721InvalidOperator",
-          inputs: [{ name: "operator", type: "address", internalType: "address" }],
+          inputs: [
+            {
+              name: "operator",
+              type: "address",
+              internalType: "address",
+            },
+          ],
         },
         {
           type: "error",
           name: "ERC721InvalidOwner",
-          inputs: [{ name: "owner", type: "address", internalType: "address" }],
+          inputs: [
+            {
+              name: "owner",
+              type: "address",
+              internalType: "address",
+            },
+          ],
         },
         {
           type: "error",
           name: "ERC721InvalidReceiver",
-          inputs: [{ name: "receiver", type: "address", internalType: "address" }],
+          inputs: [
+            {
+              name: "receiver",
+              type: "address",
+              internalType: "address",
+            },
+          ],
         },
         {
           type: "error",
           name: "ERC721InvalidSender",
-          inputs: [{ name: "sender", type: "address", internalType: "address" }],
+          inputs: [
+            {
+              name: "sender",
+              type: "address",
+              internalType: "address",
+            },
+          ],
         },
         {
           type: "error",
           name: "ERC721NonexistentToken",
-          inputs: [{ name: "tokenId", type: "uint256", internalType: "uint256" }],
+          inputs: [
+            {
+              name: "tokenId",
+              type: "uint256",
+              internalType: "uint256",
+            },
+          ],
         },
-        { type: "error", name: "DurationTooShort", inputs: [] },
-        { type: "error", name: "MintWindowClosed", inputs: [] },
-        { type: "error", name: "OnlyMinter", inputs: [] },
-        { type: "error", name: "TokenDoesNotExist", inputs: [] },
-        { type: "error", name: "ZeroAddress", inputs: [] },
+        {
+          type: "error",
+          name: "MintWindowClosed",
+          inputs: [],
+        },
+        {
+          type: "error",
+          name: "OnlyMinter",
+          inputs: [],
+        },
+        {
+          type: "error",
+          name: "TokenDoesNotExist",
+          inputs: [],
+        },
+        {
+          type: "error",
+          name: "ZeroAddress",
+          inputs: [],
+        },
       ],
+      inheritedFunctions: {},
+      deployedOnBlock: 24893757,
     },
   },
 } as const;
