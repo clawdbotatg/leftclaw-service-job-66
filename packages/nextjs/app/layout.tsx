@@ -9,7 +9,6 @@ import { getMetadata } from "~~/utils/scaffold-eth/getMetadata";
 const fraunces = Fraunces({
   subsets: ["latin"],
   variable: "--font-display",
-  weight: ["600", "700", "800", "900"],
   axes: ["SOFT", "WONK"],
 });
 
