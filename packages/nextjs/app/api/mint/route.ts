@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomBytes } from "crypto";
 import { isAddress } from "viem";
 import {
   CLAWDPFP_ABI,
@@ -23,6 +24,18 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 // Minting involves two IPFS uploads + a mainnet tx — allow longer than default.
 export const maxDuration = 120;
+
+// Stage logger — emits one line per mint lifecycle step, tagged with a short
+// request id + wallet so multi-request traces can be reassembled from Vercel
+// logs. Kept one-line so `vercel logs -q "[MINT]"` is useful.
+function mintLog(reqId: string, wallet: string, stage: string, extra: Record<string, unknown> = {}) {
+  const parts = [`[MINT]`, `reqId=${reqId}`, `wallet=${wallet}`, `stage=${stage}`];
+  for (const [k, v] of Object.entries(extra)) {
+    const val = typeof v === "bigint" ? v.toString() : typeof v === "object" ? JSON.stringify(v) : String(v);
+    parts.push(`${k}=${val}`);
+  }
+  console.log(parts.join(" "));
+}
 
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT_MAX = 3;
@@ -49,6 +62,9 @@ function decrementRateLimit(wallet: string) {
 }
 
 export async function POST(request: NextRequest) {
+  const reqId = randomBytes(4).toString("hex");
+  const t0 = Date.now();
+  let wallet = "unknown";
   try {
     const body = (await request.json().catch(() => ({}))) as {
       wallet?: string;
@@ -62,24 +78,37 @@ export async function POST(request: NextRequest) {
         hmac?: unknown;
       };
     };
-    const { wallet, imageDataUrl, prompt, signature, provenance } = body;
+    const { wallet: bodyWallet, imageDataUrl, prompt, signature, provenance } = body;
+    wallet = bodyWallet || "unknown";
 
     // --- Validate ---
-    if (!wallet || !isAddress(wallet)) {
+    if (!bodyWallet || !isAddress(bodyWallet)) {
+      mintLog(reqId, wallet, "reject", { reason: "invalid_wallet" });
       return NextResponse.json({ error: "Invalid wallet address" }, { status: 400 });
     }
     if (!imageDataUrl || typeof imageDataUrl !== "string" || !imageDataUrl.startsWith("data:image/")) {
+      mintLog(reqId, wallet, "reject", { reason: "bad_image_data_url" });
       return NextResponse.json({ error: "Image data URL is required" }, { status: 400 });
     }
     if (!prompt || typeof prompt !== "string" || prompt.length === 0 || prompt.length > 280) {
+      mintLog(reqId, wallet, "reject", { reason: "bad_prompt", len: prompt?.length });
       return NextResponse.json({ error: "Prompt must be 1-280 characters" }, { status: 400 });
     }
     if (!signature || typeof signature !== "string" || !/^0x[0-9a-fA-F]+$/.test(signature)) {
+      mintLog(reqId, wallet, "reject", { reason: "bad_signature_format", len: signature?.length });
       return NextResponse.json({ error: "Signature is required and must be hex" }, { status: 400 });
     }
+    // Non-standard sig lengths (smart contract wallets return ERC-1271 bytes, not
+    // 132-char ECDSA sigs). Log so we can tell contract-wallet users apart from
+    // truncation bugs. Standard ECDSA = 0x + 130 hex = 132 chars total.
+    if (signature.length !== 132) {
+      mintLog(reqId, wallet, "warn_nonstandard_sig", { sigLen: signature.length });
+    }
+    mintLog(reqId, wallet, "start", { promptLen: prompt.length, sigLen: signature.length });
 
     const sanitizedPrompt = prompt.replace(/<[^>]*>/g, "").trim();
     if (sanitizedPrompt.length === 0) {
+      mintLog(reqId, wallet, "reject", { reason: "empty_after_sanitize" });
       return NextResponse.json({ error: "Prompt cannot be empty after sanitization" }, { status: 400 });
     }
 
@@ -91,10 +120,12 @@ export async function POST(request: NextRequest) {
       imageBuffer = parsed.buffer;
       imageContentType = parsed.contentType;
     } catch {
+      mintLog(reqId, wallet, "reject", { reason: "image_decode_failed" });
       return NextResponse.json({ error: "Image data URL could not be decoded" }, { status: 400 });
     }
     // Reject images that are suspiciously large or empty. Base PFP is ~200 KB.
     if (imageBuffer.length === 0 || imageBuffer.length > 5 * 1024 * 1024) {
+      mintLog(reqId, wallet, "reject", { reason: "bad_image_size", bytes: imageBuffer.length });
       return NextResponse.json({ error: "Image payload invalid (empty or >5 MB)" }, { status: 400 });
     }
 
@@ -102,6 +133,7 @@ export async function POST(request: NextRequest) {
     const rateCheck = checkRateLimit(wallet);
     if (!rateCheck.allowed) {
       const retryAfterSec = Math.ceil((rateCheck.retryAfterMs || 0) / 1000);
+      mintLog(reqId, wallet, "reject", { reason: "rate_limit", retryAfterSec });
       return NextResponse.json(
         {
           error: `Rate limit exceeded. Try again in ${Math.ceil(retryAfterSec / 60)} minutes.`,
@@ -110,6 +142,7 @@ export async function POST(request: NextRequest) {
         { status: 429 },
       );
     }
+    mintLog(reqId, wallet, "preflight", { elapsedMs: Date.now() - t0 });
 
     const publicClient = getPublicClient();
 
@@ -122,13 +155,14 @@ export async function POST(request: NextRequest) {
         functionName: "mintDeadline",
       })) as bigint;
     } catch (err) {
-      console.error("mintDeadline read failed:", err);
+      mintLog(reqId, wallet, "error", { step: "read_mintDeadline", msg: (err as Error).message });
       decrementRateLimit(wallet);
       return NextResponse.json({ error: "Could not verify mint deadline. Try again shortly." }, { status: 503 });
     }
     const nowSec = BigInt(Math.floor(Date.now() / 1000));
     // 60s grace: don't start a mint we know we can't confirm before the deadline.
     if (nowSec + 60n >= mintDeadline) {
+      mintLog(reqId, wallet, "reject", { reason: "deadline_passed" });
       decrementRateLimit(wallet);
       return NextResponse.json({ error: "The CLAWD PFP minting window has closed." }, { status: 410 });
     }
@@ -138,12 +172,13 @@ export async function POST(request: NextRequest) {
     try {
       relayerAccount = getRelayerAccount();
     } catch (err) {
-      console.error("relayer account init failed:", err);
+      mintLog(reqId, wallet, "error", { step: "relayer_init", msg: (err as Error).message });
       decrementRateLimit(wallet);
       return NextResponse.json({ error: "Minting temporarily unavailable (relayer not configured)." }, { status: 503 });
     }
     const relayerBalance = await publicClient.getBalance({ address: relayerAccount.address });
     if (relayerBalance < MIN_RELAYER_ETH) {
+      mintLog(reqId, wallet, "reject", { reason: "relayer_low_balance", balanceWei: relayerBalance });
       decrementRateLimit(wallet);
       return NextResponse.json(
         {
@@ -157,6 +192,7 @@ export async function POST(request: NextRequest) {
     // --- Preflight: CV balance ---
     const balance = await getCvBalance(wallet);
     if (balance.balance < MINT_CV_COST) {
+      mintLog(reqId, wallet, "reject", { reason: "insufficient_cv", have: balance.balance, need: MINT_CV_COST });
       decrementRateLimit(wallet);
       return NextResponse.json(
         {
@@ -192,19 +228,23 @@ export async function POST(request: NextRequest) {
       typeof provenance.expiry !== "number" ||
       typeof provenance.hmac !== "string"
     ) {
+      mintLog(reqId, wallet, "reject", { reason: "missing_provenance" });
       decrementRateLimit(wallet);
       return NextResponse.json({ error: "missing provenance" }, { status: 400 });
     }
     if (provenance.wallet.toLowerCase() !== wallet.toLowerCase()) {
+      mintLog(reqId, wallet, "reject", { reason: "provenance_wallet_mismatch" });
       decrementRateLimit(wallet);
       return NextResponse.json({ error: "provenance wallet mismatch" }, { status: 400 });
     }
     if (provenance.expiry <= Math.floor(Date.now() / 1000)) {
+      mintLog(reqId, wallet, "reject", { reason: "provenance_expired" });
       decrementRateLimit(wallet);
       return NextResponse.json({ error: "provenance expired" }, { status: 400 });
     }
     const incomingImageSha = sha256ImageBase64(imageDataUrl);
     if (incomingImageSha !== provenance.imageSha256) {
+      mintLog(reqId, wallet, "reject", { reason: "image_sha_mismatch" });
       decrementRateLimit(wallet);
       return NextResponse.json({ error: "image does not match provenance" }, { status: 400 });
     }
@@ -215,21 +255,36 @@ export async function POST(request: NextRequest) {
       hmac: provenance.hmac,
     });
     if (!verify.ok) {
+      mintLog(reqId, wallet, "reject", { reason: "bad_provenance_hmac" });
       decrementRateLimit(wallet);
       return NextResponse.json({ error: "invalid provenance signature" }, { status: 400 });
     }
 
     // --- Charge CV FIRST (user-facing failures here mean no IPFS/tx cost) ---
+    mintLog(reqId, wallet, "charging_cv", { elapsedMs: Date.now() - t0 });
     const charge = await spendCv({ wallet, amount: MINT_CV_COST, signature });
     if (!charge.ok) {
+      // Flag signature-related errors explicitly so the frontend can clear the
+      // stale cached signature and prompt the user to re-sign. This catches
+      // smart-contract-wallet (ERC-1271) sigs larv.ai rejects as "invalid length".
+      const errText = charge.error || "unknown";
+      const isSigError = /signature|invalid.*sig|sig.*invalid|sig.*length/i.test(errText);
+      mintLog(reqId, wallet, "cv_charge_failed", {
+        status: charge.status,
+        err: errText,
+        isSigError,
+        sigLen: signature.length,
+      });
       decrementRateLimit(wallet);
       return NextResponse.json(
         {
-          error: `CV charge failed: ${charge.error || "unknown"}`,
+          error: `CV charge failed: ${errText}`,
+          code: isSigError ? "bad_signature" : undefined,
         },
         { status: charge.status === 402 ? 402 : 502 },
       );
     }
+    mintLog(reqId, wallet, "cv_charged", { newBalance: charge.newBalance, elapsedMs: Date.now() - t0 });
 
     // From this point on we've taken the user's CV. Any failure needs to be
     // logged so it can be reconciled manually (larv.ai doesn't support
@@ -249,6 +304,7 @@ export async function POST(request: NextRequest) {
       );
       imageCid = upload.cid;
     } catch (err) {
+      mintLog(reqId, wallet, "ipfs_image_failed", { msg: (err as Error).message });
       logCvCharged(`BGIPFS image upload failed: ${(err as Error).message}`);
       return NextResponse.json(
         {
@@ -258,6 +314,7 @@ export async function POST(request: NextRequest) {
         { status: 502 },
       );
     }
+    mintLog(reqId, wallet, "image_pinned", { cid: imageCid, bytes: imageBuffer.length, elapsedMs: Date.now() - t0 });
 
     // --- Build + pin metadata JSON ---
     const imageGatewayUrl = bgipfsGatewayUrl(imageCid);
@@ -277,6 +334,7 @@ export async function POST(request: NextRequest) {
       const upload = await bgipfsAddJson(metadata, "metadata.json");
       metadataCid = upload.cid;
     } catch (err) {
+      mintLog(reqId, wallet, "ipfs_metadata_failed", { msg: (err as Error).message });
       logCvCharged(`BGIPFS metadata upload failed: ${(err as Error).message}`);
       return NextResponse.json(
         {
@@ -287,6 +345,7 @@ export async function POST(request: NextRequest) {
       );
     }
     const metadataURI = bgipfsGatewayUrl(metadataCid);
+    mintLog(reqId, wallet, "metadata_pinned", { cid: metadataCid, elapsedMs: Date.now() - t0 });
 
     // --- Simulate the mint before sending ---
     try {
@@ -298,6 +357,7 @@ export async function POST(request: NextRequest) {
         args: [wallet as `0x${string}`, metadataURI],
       });
     } catch (err) {
+      mintLog(reqId, wallet, "simulate_reverted", { msg: (err as Error).message });
       logCvCharged(`mint simulation reverted: ${(err as Error).message}`);
       return NextResponse.json(
         {
@@ -307,6 +367,7 @@ export async function POST(request: NextRequest) {
         { status: 502 },
       );
     }
+    mintLog(reqId, wallet, "simulated", { elapsedMs: Date.now() - t0 });
 
     // --- Send mint tx from relayer ---
     let txHash: `0x${string}`;
@@ -321,6 +382,7 @@ export async function POST(request: NextRequest) {
         account: walletClient.account,
       });
     } catch (err) {
+      mintLog(reqId, wallet, "write_failed", { msg: (err as Error).message });
       logCvCharged(`mint write failed: ${(err as Error).message}`);
       return NextResponse.json(
         {
@@ -330,27 +392,98 @@ export async function POST(request: NextRequest) {
         { status: 502 },
       );
     }
+    mintLog(reqId, wallet, "broadcast", { txHash, elapsedMs: Date.now() - t0 });
 
     // --- Wait for receipt + parse tokenId ---
+    // Leave enough headroom for the 120s maxDuration: preflight + pins + sim
+    // already consumed ~5-20s. Give viem 60s then do one more manual poll.
+    const waitStartedAt = Date.now();
     let tokenIdFromReceipt: bigint | null = null;
+    let receiptStatus: "success" | "reverted" | "pending" = "pending";
     try {
-      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 90_000 });
-      if (receipt.status !== "success") {
+      const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 60_000 });
+      if (receipt.status === "success") {
+        tokenIdFromReceipt = parseTokenIdFromReceiptLogs(receipt.logs);
+        receiptStatus = "success";
+        mintLog(reqId, wallet, "confirmed", {
+          txHash,
+          tokenId: tokenIdFromReceipt,
+          blockNumber: receipt.blockNumber,
+          waitMs: Date.now() - waitStartedAt,
+        });
+      } else {
+        receiptStatus = "reverted";
+        mintLog(reqId, wallet, "reverted", { txHash, blockNumber: receipt.blockNumber });
         logCvCharged(`mint tx reverted on-chain (${txHash})`);
         return NextResponse.json(
           {
             error: "Mint transaction reverted on-chain. Your CV has been charged — please contact support.",
+            code: "tx_reverted",
             txHash,
             reconcile: { wallet, amount: MINT_CV_COST, imageCid, metadataCid, txHash },
           },
           { status: 502 },
         );
       }
-      tokenIdFromReceipt = parseTokenIdFromReceiptLogs(receipt.logs);
     } catch (err) {
-      // Tx is broadcast; we just couldn't wait for the receipt. Return what
-      // we have — the frontend can still show the Etherscan link.
-      console.error("waitForTransactionReceipt failed:", err);
+      // Timed out waiting. One more direct poll — the tx may have landed right
+      // as we were giving up. If it still isn't mined, return 202 pending and
+      // let the frontend show an Etherscan link instead of claiming success.
+      mintLog(reqId, wallet, "wait_timeout", {
+        txHash,
+        msg: (err as Error).message,
+        waitMs: Date.now() - waitStartedAt,
+      });
+      try {
+        const late = await publicClient.getTransactionReceipt({ hash: txHash });
+        if (late && late.status === "success") {
+          tokenIdFromReceipt = parseTokenIdFromReceiptLogs(late.logs);
+          receiptStatus = "success";
+          mintLog(reqId, wallet, "confirmed_late", {
+            txHash,
+            tokenId: tokenIdFromReceipt,
+            blockNumber: late.blockNumber,
+          });
+        } else if (late && late.status === "reverted") {
+          receiptStatus = "reverted";
+          mintLog(reqId, wallet, "reverted_late", { txHash, blockNumber: late.blockNumber });
+          logCvCharged(`mint tx reverted on-chain (${txHash})`);
+          return NextResponse.json(
+            {
+              error: "Mint transaction reverted on-chain. Your CV has been charged — please contact support.",
+              code: "tx_reverted",
+              txHash,
+              reconcile: { wallet, amount: MINT_CV_COST, imageCid, metadataCid, txHash },
+            },
+            { status: 502 },
+          );
+        }
+      } catch {
+        // getTransactionReceipt throws when tx is not yet mined — that's fine,
+        // we fall through to the pending response below.
+      }
+    }
+
+    // Receipt timed out AND the post-timeout poll found nothing: tx is still
+    // pending (or was dropped from mempool). Return 202 so the frontend can
+    // show an Etherscan link instead of falsely reporting success with a
+    // tokenId we can't actually confirm is correct.
+    if (receiptStatus === "pending") {
+      mintLog(reqId, wallet, "return_pending", { txHash, totalMs: Date.now() - t0 });
+      logCvCharged(`mint tx pending after wait (${txHash}) — may still confirm or have been dropped`);
+      return NextResponse.json(
+        {
+          error:
+            "Your transaction was broadcast but hasn't confirmed yet. Check Etherscan below — if it doesn't confirm in a few minutes, please contact support.",
+          code: "tx_pending",
+          txHash,
+          imageCid,
+          metadataCid,
+          imageUrl: imageGatewayUrl,
+          reconcile: { wallet, amount: MINT_CV_COST, imageCid, metadataCid, txHash },
+        },
+        { status: 202 },
+      );
     }
 
     const finalTokenId =
@@ -360,6 +493,7 @@ export async function POST(request: NextRequest) {
           ? Number(predictedTokenId)
           : null;
 
+    mintLog(reqId, wallet, "done", { txHash, tokenId: finalTokenId, totalMs: Date.now() - t0 });
     return NextResponse.json({
       txHash,
       tokenId: finalTokenId,
@@ -371,6 +505,7 @@ export async function POST(request: NextRequest) {
       newBalance: charge.newBalance,
     });
   } catch (error) {
+    mintLog(reqId, wallet, "unhandled_error", { msg: (error as Error).message, totalMs: Date.now() - t0 });
     console.error("Mint API error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }

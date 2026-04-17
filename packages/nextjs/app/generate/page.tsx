@@ -84,6 +84,9 @@ const Generate: NextPage = () => {
     txHash: string;
     tokenId: number;
   } | null>(null);
+  // Tx was broadcast but didn't confirm in the server's wait window. Show a
+  // distinct state with an Etherscan link instead of a fake "success" toast.
+  const [pendingMint, setPendingMint] = useState<{ txHash: string; message: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Hydrate the pending (unminted) PFP from localStorage when wallet changes.
@@ -137,6 +140,15 @@ const Generate: NextPage = () => {
     }
   }, [cvSignature, connectedAddress, signMessageAsync]);
 
+  // Drop a cached signature that the server flagged as invalid so the next
+  // action re-prompts the wallet. The user sees a friendly nudge and retries.
+  const clearSignatureCache = useCallback(() => {
+    if (typeof window !== "undefined" && connectedAddress) {
+      window.localStorage.removeItem(`cvSignature:${connectedAddress.toLowerCase()}`);
+    }
+    setCvSignature(null);
+  }, [connectedAddress]);
+
   const handleGenerate = useCallback(
     async (prompt: string) => {
       if (!connectedAddress) return;
@@ -165,7 +177,14 @@ const Generate: NextPage = () => {
         const data = await res.json();
 
         if (!res.ok) {
-          setError(data.error || "Image generation failed. Please try again.");
+          if (data.code === "bad_signature") {
+            clearSignatureCache();
+            setError(
+              `${data.error || "Your signature was rejected."} Your wallet will be asked to sign again on the next try. (If you're using a smart contract wallet like Safe, minting may not work.)`,
+            );
+          } else {
+            setError(data.error || "Image generation failed. Please try again.");
+          }
           return;
         }
 
@@ -183,19 +202,20 @@ const Generate: NextPage = () => {
           );
         }
         notification.success("PFP generated successfully!");
-      } catch {
-        setError("Image generation failed. Please try again.");
+      } catch (err) {
+        setError(`Image generation failed: ${(err as Error).message || "network error"}. Please try again.`);
       } finally {
         setIsGenerating(false);
       }
     },
-    [connectedAddress, getSignature],
+    [connectedAddress, getSignature, clearSignatureCache],
   );
 
   const handleMint = useCallback(async () => {
     if (!connectedAddress || !generatedImage || !generatedPrompt) return;
 
     setError(null);
+    setPendingMint(null);
     setIsMinting(true);
 
     try {
@@ -219,8 +239,29 @@ const Generate: NextPage = () => {
 
       const data = await res.json();
 
+      // 202: broadcast but still pending. Don't claim success — show the
+      // Etherscan link so the user can see the actual outcome.
+      if (res.status === 202 && data.txHash) {
+        setPendingMint({
+          txHash: data.txHash,
+          message: data.error || "Your transaction is still pending. Check Etherscan for the latest status.",
+        });
+        return;
+      }
+
       if (!res.ok) {
-        setError(data.error || "Minting failed. Please try again.");
+        if (data.code === "bad_signature") {
+          clearSignatureCache();
+          setError(
+            `${data.error || "Your signature was rejected."} Your wallet will be asked to sign again on the next try. (If you're using a smart contract wallet like Safe, minting may not work.)`,
+          );
+          return;
+        }
+        // Surface the backend error verbatim — it now includes code, txHash,
+        // reconcile info when applicable, so the user can take action.
+        const verbose = [data.error || "Minting failed. Please try again."];
+        if (data.txHash) verbose.push(`tx: ${data.txHash}`);
+        setError(verbose.join(" — "));
         return;
       }
 
@@ -232,18 +273,19 @@ const Generate: NextPage = () => {
         window.localStorage.removeItem(pendingPfpKey(connectedAddress));
       }
       notification.success("NFT minted successfully!");
-    } catch {
-      setError("Minting failed. Please try again.");
+    } catch (err) {
+      setError(`Minting failed: ${(err as Error).message || "network error"}. Please try again.`);
     } finally {
       setIsMinting(false);
     }
-  }, [connectedAddress, generatedImage, generatedPrompt, generatedProvenance, getSignature]);
+  }, [connectedAddress, generatedImage, generatedPrompt, generatedProvenance, getSignature, clearSignatureCache]);
 
   const handleGenerateAnother = () => {
     setGeneratedImage(null);
     setGeneratedPrompt(null);
     setGeneratedProvenance(null);
     setMintResult(null);
+    setPendingMint(null);
     setError(null);
     if (typeof window !== "undefined" && connectedAddress) {
       window.localStorage.removeItem(pendingPfpKey(connectedAddress));
@@ -369,11 +411,44 @@ const Generate: NextPage = () => {
               </div>
             )}
 
-            {!mintResult && !generatedImage && (
+            {pendingMint && !mintResult && (
+              <div className="card bg-base-100 shadow-xl p-6 text-center">
+                {generatedImage && (
+                  <div className="mb-4 flex justify-center">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={generatedImage} alt="Pending CLAWD PFP" className="w-64 h-64 rounded-xl object-cover" />
+                  </div>
+                )}
+                <h2 className="text-2xl font-bold mb-2">Transaction Pending</h2>
+                <p className="text-warning text-sm mb-4">{pendingMint.message}</p>
+                <a
+                  href={`https://etherscan.io/tx/${pendingMint.txHash}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="link link-primary mb-4 block font-mono text-xs break-all"
+                >
+                  {pendingMint.txHash}
+                </a>
+                <p className="text-xs text-base-content/60 mb-4">
+                  Your CV has been charged. If the transaction doesn&apos;t confirm in a few minutes, please contact
+                  support with the hash above for a refund.
+                </p>
+                <div className="flex gap-4 justify-center">
+                  <Link href="/" className="btn btn-outline">
+                    Back to Gallery
+                  </Link>
+                  <button className="btn btn-primary" onClick={() => setPendingMint(null)}>
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!mintResult && !pendingMint && !generatedImage && (
               <GenerateForm onGenerate={handleGenerate} isGenerating={isGenerating} disabled={false} />
             )}
 
-            {generatedImage && !mintResult && (
+            {generatedImage && !mintResult && !pendingMint && (
               <div className="card bg-base-100 shadow-xl p-6 text-center">
                 <div className="mb-4 flex justify-center">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
