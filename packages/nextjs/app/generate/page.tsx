@@ -41,6 +41,23 @@ const Generate: NextPage = () => {
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [isMinting, setIsMinting] = useState(false);
+  // Time-based estimate of where we are in the mint flow (0=Charging, 1=Pinning, 2=Minting, 3=Confirming)
+  const [mintStage, setMintStage] = useState(0);
+
+  useEffect(() => {
+    if (!isMinting) {
+      setMintStage(0);
+      return;
+    }
+    const t1 = setTimeout(() => setMintStage(1), 2500);
+    const t2 = setTimeout(() => setMintStage(2), 9000);
+    const t3 = setTimeout(() => setMintStage(3), 18000);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+    };
+  }, [isMinting]);
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [generatedPrompt, setGeneratedPrompt] = useState<string | null>(null);
   const [generatedProvenance, setGeneratedProvenance] = useState<{
@@ -323,10 +340,14 @@ const Generate: NextPage = () => {
                 {isMinting && (
                   <div className="mt-4 text-sm text-base-content/60">
                     <ul className="steps steps-vertical text-left">
-                      <li className="step step-primary">Charging CV</li>
-                      <li className="step step-primary">Pinning to IPFS</li>
-                      <li className="step">Minting on Ethereum</li>
-                      <li className="step">Confirming</li>
+                      {["Charging CV", "Pinning to IPFS", "Minting on Ethereum", "Confirming"].map((label, i) => (
+                        <li key={label} className={`step ${i <= mintStage ? "step-primary" : ""}`}>
+                          <span className="flex items-center gap-2">
+                            {label}
+                            {i === mintStage && <span className="loading loading-spinner loading-xs"></span>}
+                          </span>
+                        </li>
+                      ))}
                     </ul>
                   </div>
                 )}
