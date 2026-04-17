@@ -6,6 +6,8 @@ import { CountdownTimer } from "~~/components/clawd-pfp/CountdownTimer";
 import { PFPCard } from "~~/components/clawd-pfp/PFPCard";
 import { useScaffoldEventHistory, useScaffoldReadContract } from "~~/hooks/scaffold-eth";
 
+const OPENSEA_COLLECTION_URL = "https://opensea.io/assets/ethereum/0xb5741b033c45330a34952436a34b1b25a208af10";
+
 const Home: NextPage = () => {
   const { data: mintDeadline, isLoading: isLoadingDeadline } = useScaffoldReadContract({
     contractName: "ClawdPFP",
@@ -64,7 +66,15 @@ const Home: NextPage = () => {
         <div className="text-center mb-6">
           <h2 className="text-2xl font-bold">Gallery</h2>
           <p className="text-sm text-base-content/60">
-            {totalMinted} PFP{totalMinted !== 1 ? "s" : ""} minted
+            {totalMinted} PFP{totalMinted !== 1 ? "s" : ""} minted &middot;{" "}
+            <a
+              href={OPENSEA_COLLECTION_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="link link-hover link-primary"
+            >
+              View on OpenSea
+            </a>
           </p>
         </div>
 
