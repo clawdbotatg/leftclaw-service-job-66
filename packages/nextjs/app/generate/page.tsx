@@ -445,7 +445,14 @@ const Generate: NextPage = () => {
             )}
 
             {!mintResult && !pendingMint && !generatedImage && (
-              <GenerateForm onGenerate={handleGenerate} isGenerating={isGenerating} disabled={false} />
+              <>
+                <div className="text-xs text-base-content/60 bg-base-200/50 rounded-lg p-3 max-w-md mx-auto">
+                  <span className="font-semibold">What you&apos;ll sign:</span> an off-chain message (&quot;larv.ai CV
+                  Spend&quot;) that authorizes CV to be charged from your larv.ai balance. It&apos;s free, uses no gas,
+                  and never sends funds from your wallet.
+                </div>
+                <GenerateForm onGenerate={handleGenerate} isGenerating={isGenerating} disabled={false} />
+              </>
             )}
 
             {generatedImage && !mintResult && !pendingMint && (
@@ -472,6 +479,12 @@ const Generate: NextPage = () => {
                   <button className="btn btn-outline btn-sm" onClick={handleGenerateAnother} disabled={isMinting}>
                     Generate Again ({GENERATE_CV_COST.toLocaleString()} CV)
                   </button>
+                  {!isMinting && !cvSignature && (
+                    <p className="text-xs text-base-content/60">
+                      Your wallet will ask you to sign an off-chain message (&quot;larv.ai CV Spend&quot;). No gas, no
+                      funds sent — the relayer pays gas for your mint.
+                    </p>
+                  )}
                 </div>
 
                 {isMinting && (

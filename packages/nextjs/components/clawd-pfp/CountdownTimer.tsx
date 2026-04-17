@@ -101,6 +101,17 @@ export const CountdownTimer = ({ mintDeadline, isLoading }: CountdownTimerProps)
         <span>{pad(timeRemaining.seconds)}</span>
       </div>
       <p className="text-xs opacity-70 mt-1">{isGracePeriod ? "Minting closing soon..." : "left to mint"}</p>
+      <p className="text-xs opacity-50 mt-2 max-w-md mx-auto">
+        Enforced by the smart contract on Ethereum — no extensions possible.{" "}
+        <a
+          href="https://etherscan.io/address/0xb5741b033c45330a34952436a34b1b25a208af10#code"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="link link-hover"
+        >
+          View verified contract
+        </a>
+      </p>
     </div>
   );
 };
