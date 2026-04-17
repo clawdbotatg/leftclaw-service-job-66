@@ -15,6 +15,12 @@ import { notification } from "~~/utils/scaffold-eth";
 const GENERATE_CV_COST = 500_000;
 const MINT_CV_COST = 5_000_000;
 
+// Keep the last generated (but not yet minted) PFP in localStorage keyed by
+// wallet, so navigating away and back doesn't lose it. Expiry is enforced by
+// the server's HMAC provenance (10 min), so naturally-expired entries can't
+// be minted anyway — we just drop them on load.
+const pendingPfpKey = (addr: string) => `pendingPfp:${addr.toLowerCase()}`;
+
 const Generate: NextPage = () => {
   const { address: connectedAddress, isConnected, chain } = useAccount();
   const { signMessageAsync } = useSignMessage();
@@ -80,6 +86,38 @@ const Generate: NextPage = () => {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Hydrate the pending (unminted) PFP from localStorage when wallet changes.
+  // Drops entries whose provenance has expired so the user can't try to mint
+  // something the server will reject anyway.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!connectedAddress) {
+      setGeneratedImage(null);
+      setGeneratedPrompt(null);
+      setGeneratedProvenance(null);
+      return;
+    }
+    const raw = window.localStorage.getItem(pendingPfpKey(connectedAddress));
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw) as {
+        image?: string;
+        prompt?: string;
+        provenance?: { imageSha256: string; wallet: string; expiry: number; hmac: string } | null;
+      };
+      const nowSec = Math.floor(Date.now() / 1000);
+      if (parsed.provenance && parsed.provenance.expiry <= nowSec) {
+        window.localStorage.removeItem(pendingPfpKey(connectedAddress));
+        return;
+      }
+      if (parsed.image) setGeneratedImage(parsed.image);
+      if (parsed.prompt) setGeneratedPrompt(parsed.prompt);
+      if (parsed.provenance) setGeneratedProvenance(parsed.provenance);
+    } catch {
+      window.localStorage.removeItem(pendingPfpKey(connectedAddress));
+    }
+  }, [connectedAddress]);
+
   const isFrozen = mintDeadline ? BigInt(Math.floor(Date.now() / 1000)) > mintDeadline : false;
 
   const getSignature = useCallback(async (): Promise<string | null> => {
@@ -134,6 +172,16 @@ const Generate: NextPage = () => {
         setGeneratedImage(data.image);
         setGeneratedPrompt(data.prompt);
         setGeneratedProvenance(data.provenance ?? null);
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(
+            pendingPfpKey(connectedAddress),
+            JSON.stringify({
+              image: data.image,
+              prompt: data.prompt,
+              provenance: data.provenance ?? null,
+            }),
+          );
+        }
         notification.success("PFP generated successfully!");
       } catch {
         setError("Image generation failed. Please try again.");
@@ -180,6 +228,9 @@ const Generate: NextPage = () => {
         txHash: data.txHash,
         tokenId: data.tokenId,
       });
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(pendingPfpKey(connectedAddress));
+      }
       notification.success("NFT minted successfully!");
     } catch {
       setError("Minting failed. Please try again.");
@@ -194,6 +245,9 @@ const Generate: NextPage = () => {
     setGeneratedProvenance(null);
     setMintResult(null);
     setError(null);
+    if (typeof window !== "undefined" && connectedAddress) {
+      window.localStorage.removeItem(pendingPfpKey(connectedAddress));
+    }
   };
 
   return (
