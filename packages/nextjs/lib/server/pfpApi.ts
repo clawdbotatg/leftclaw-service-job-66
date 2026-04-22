@@ -349,6 +349,8 @@ export type PfpListEntry = {
   image: string | null;
   minter: string;
   tokenUri: string;
+  name: string | null;
+  description: string | null;
 };
 
 // Per-lambda in-memory cache. Cold starts re-populate from chain + IPFS, but
@@ -357,14 +359,24 @@ const pfpEntryCache = new Map<number, PfpListEntry>();
 let lastScannedBlock: bigint | null = null;
 let refreshInFlight: Promise<void> | null = null;
 
-async function resolveMetadataImage(tokenUri: string): Promise<string | null> {
+type ResolvedMetadata = {
+  image: string | null;
+  name: string | null;
+  description: string | null;
+};
+
+async function resolveMetadata(tokenUri: string): Promise<ResolvedMetadata> {
   try {
     const res = await fetch(tokenUri, { cache: "force-cache" });
-    if (!res.ok) return null;
-    const json = (await res.json()) as { image?: unknown };
-    return typeof json.image === "string" ? json.image : null;
+    if (!res.ok) return { image: null, name: null, description: null };
+    const json = (await res.json()) as { image?: unknown; name?: unknown; description?: unknown };
+    return {
+      image: typeof json.image === "string" ? json.image : null,
+      name: typeof json.name === "string" ? json.name : null,
+      description: typeof json.description === "string" ? json.description : null,
+    };
   } catch {
-    return null;
+    return { image: null, name: null, description: null };
   }
 }
 
@@ -394,8 +406,8 @@ async function refreshPfpList(): Promise<void> {
       const tokenId = Number(log.args.tokenId);
       const minter = (log.args.to ?? "") as string;
       const tokenUri = (log.args.tokenURI ?? "") as string;
-      const image = tokenUri ? await resolveMetadataImage(tokenUri) : null;
-      pfpEntryCache.set(tokenId, { id: tokenId, image, minter, tokenUri });
+      const metadata = tokenUri ? await resolveMetadata(tokenUri) : { image: null, name: null, description: null };
+      pfpEntryCache.set(tokenId, { id: tokenId, minter, tokenUri, ...metadata });
     }),
   );
 
