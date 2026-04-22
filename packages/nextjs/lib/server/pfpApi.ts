@@ -339,6 +339,86 @@ export const CLAWDPFP_ABI = [
   },
 ] as const;
 
+// Mainnet block where ClawdPFP was deployed — keeps the getLogs scan tight.
+export const CLAWDPFP_DEPLOY_BLOCK = 24893757n;
+
+// -------------------- Gallery listing --------------------
+
+export type PfpListEntry = {
+  id: number;
+  image: string | null;
+  minter: string;
+  tokenUri: string;
+};
+
+// Per-lambda in-memory cache. Cold starts re-populate from chain + IPFS, but
+// within a warm instance we only process blocks we haven't scanned yet.
+const pfpEntryCache = new Map<number, PfpListEntry>();
+let lastScannedBlock: bigint | null = null;
+let refreshInFlight: Promise<void> | null = null;
+
+async function resolveMetadataImage(tokenUri: string): Promise<string | null> {
+  try {
+    const res = await fetch(tokenUri, { cache: "force-cache" });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { image?: unknown };
+    return typeof json.image === "string" ? json.image : null;
+  } catch {
+    return null;
+  }
+}
+
+async function refreshPfpList(): Promise<void> {
+  const client = getPublicClient();
+  const currentBlock = await client.getBlockNumber();
+  const fromBlock = lastScannedBlock !== null ? lastScannedBlock + 1n : CLAWDPFP_DEPLOY_BLOCK;
+  if (fromBlock > currentBlock) return;
+
+  const logs = await client.getLogs({
+    address: CLAWDPFP_ADDRESS,
+    event: {
+      type: "event",
+      name: "PFPMinted",
+      inputs: [
+        { name: "tokenId", type: "uint256", indexed: true },
+        { name: "to", type: "address", indexed: true },
+        { name: "tokenURI", type: "string", indexed: false },
+      ],
+    },
+    fromBlock,
+    toBlock: currentBlock,
+  });
+
+  await Promise.all(
+    logs.map(async log => {
+      const tokenId = Number(log.args.tokenId);
+      const minter = (log.args.to ?? "") as string;
+      const tokenUri = (log.args.tokenURI ?? "") as string;
+      const image = tokenUri ? await resolveMetadataImage(tokenUri) : null;
+      pfpEntryCache.set(tokenId, { id: tokenId, image, minter, tokenUri });
+    }),
+  );
+
+  lastScannedBlock = currentBlock;
+}
+
+/**
+ * Returns every ClawdPFP mint as a flat list, newest first. Designed for
+ * public consumption by bots / aggregators — resolves tokenURI metadata to
+ * include the image URL directly so callers don't need to fetch IPFS.
+ */
+export async function listAllPfps(): Promise<PfpListEntry[]> {
+  // Coalesce concurrent requests onto a single refresh so a cold-start burst
+  // doesn't fan out 150 IPFS fetches × N callers.
+  if (!refreshInFlight) {
+    refreshInFlight = refreshPfpList().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  await refreshInFlight;
+  return [...pfpEntryCache.values()].sort((a, b) => b.id - a.id);
+}
+
 // -------------------- Image provenance (HMAC) --------------------
 
 export const IMAGE_PROVENANCE_TTL_SEC = 10 * 60; // 10 minutes
