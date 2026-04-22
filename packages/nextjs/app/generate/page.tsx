@@ -53,8 +53,21 @@ function friendlySigError(err: unknown): string {
   if (name === "ConnectorNotConnectedError" || msg.includes("not connected") || msg.includes("no connector")) {
     return "Your wallet looks disconnected. Reconnect it and try again.";
   }
+  // Wagmi's internal chain state is out of sync with the connector — most
+  // commonly leftover state from an older deploy that chain-hopped to Base.
+  // We auto-recover in getSignature; this copy is the fallback if recovery
+  // also fails.
+  if (msg.includes("current chain of the connector") || msg.includes("does not match the connection")) {
+    return "Your wallet's chain is out of sync with the app. Refresh the page, or disconnect and reconnect your wallet.";
+  }
   const detail = e?.shortMessage || e?.message;
   return `Signature request failed${detail ? `: ${detail}` : ""}. Open your wallet and try again.`;
+}
+
+function isChainMismatchError(err: unknown): boolean {
+  const e = err as { message?: string; shortMessage?: string };
+  const msg = (e?.shortMessage || e?.message || "").toLowerCase();
+  return msg.includes("current chain of the connector") || msg.includes("does not match the connection");
 }
 
 const Generate: NextPage = () => {
@@ -238,14 +251,31 @@ const Generate: NextPage = () => {
       }
     }
 
-    try {
+    const signAndCache = async () => {
       const sig = await signMessageAsync({ message: "larv.ai CV Spend" });
       setCvSignature(sig);
       if (typeof window !== "undefined") {
         window.localStorage.setItem(cvSigKey(connectedAddress), sig);
       }
       return sig;
+    };
+
+    try {
+      return await signAndCache();
     } catch (err) {
+      // Wagmi's stored connection chain doesn't match what the connector
+      // reports — almost always leftover state from a prior deploy that
+      // chain-hopped to Base. Force-sync by switching wagmi's chain to what
+      // the connector is actually on, then retry the sign once. If MetaMask
+      // is already on that chain it resolves without a popup.
+      if (isChainMismatchError(err)) {
+        try {
+          await switchChainAsync({ chainId: targetNetwork.id });
+          return await signAndCache();
+        } catch (retryErr) {
+          err = retryErr;
+        }
+      }
       // Dump enough context that a screenshot of the console is diagnosable
       // without us needing to go back and forth with the user. Safe to log
       // — nothing here is a secret.
@@ -279,7 +309,16 @@ const Generate: NextPage = () => {
         }
       }
     }
-  }, [cvSignature, connectedAddress, chain?.id, connector, isSmartWallet, signMessageAsync, switchChainAsync]);
+  }, [
+    cvSignature,
+    connectedAddress,
+    chain?.id,
+    connector,
+    isSmartWallet,
+    targetNetwork.id,
+    signMessageAsync,
+    switchChainAsync,
+  ]);
 
   // Drop a cached signature that the server flagged as invalid so the next
   // action re-prompts the wallet. The user sees a friendly nudge and retries.
