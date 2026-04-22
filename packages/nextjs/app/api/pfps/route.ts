@@ -2,9 +2,11 @@ import { NextResponse } from "next/server";
 import { listAllPfps } from "~~/lib/server/pfpApi";
 
 export const runtime = "nodejs";
-// Not force-dynamic — we want Vercel's data cache to respect the headers
-// below so bot traffic doesn't keep re-scanning IPFS.
-export const revalidate = 60;
+// Must be dynamic — a revalidate window causes `next build` to try to
+// pre-render this route at build time, which kicks off a full chain scan
+// + N × IPFS fetches and exceeds the 60s Vercel build timeout. Bot/edge
+// caching is still handled by the Cache-Control header below.
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
