@@ -258,7 +258,84 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "invalid provenance signature" }, { status: 400 });
     }
 
-    // --- Charge CV FIRST (user-facing failures here mean no IPFS/tx cost) ---
+    // --- Pin image to BGIPFS (BEFORE charging CV) ---
+    // We intentionally pin & simulate before the CV charge so a transient
+    // BGIPFS blip or a revert doesn't burn the user's CV. The generate flow
+    // already cost CV to produce this image (gated by the provenance HMAC
+    // expiring in 10 min), so a pin-only request can't be cheaper spam than
+    // the existing generate cost.
+    let imageCid: string;
+    try {
+      const upload = await bgipfsAddBytes(
+        imageBuffer,
+        `clawd-pfp.${imageContentType.split("/")[1] || "png"}`,
+        imageContentType,
+      );
+      imageCid = upload.cid;
+    } catch (err) {
+      mintLog(reqId, wallet, "ipfs_image_failed", { msg: (err as Error).message });
+      decrementRateLimit(wallet);
+      return NextResponse.json(
+        {
+          error: `Image pinning failed: ${(err as Error).message}. No CV was charged — please try again in a moment.`,
+        },
+        { status: 502 },
+      );
+    }
+    mintLog(reqId, wallet, "image_pinned", { cid: imageCid, bytes: imageBuffer.length, elapsedMs: Date.now() - t0 });
+
+    // --- Build + pin metadata JSON (still before CV charge) ---
+    const imageGatewayUrl = bgipfsGatewayUrl(imageCid);
+    const metadataName = predictedTokenId !== null ? `CLAWD PFP #${predictedTokenId.toString()}` : "CLAWD PFP";
+    const metadata = {
+      name: metadataName,
+      description: sanitizedPrompt,
+      image: imageGatewayUrl,
+      external_url: "https://leftclaw.services",
+      attributes: [
+        { trait_type: "Prompt", value: sanitizedPrompt },
+        { trait_type: "Minted By", value: wallet },
+      ],
+    };
+    let metadataCid: string;
+    try {
+      const upload = await bgipfsAddJson(metadata, "metadata.json");
+      metadataCid = upload.cid;
+    } catch (err) {
+      mintLog(reqId, wallet, "ipfs_metadata_failed", { msg: (err as Error).message });
+      decrementRateLimit(wallet);
+      return NextResponse.json(
+        {
+          error: `Metadata pinning failed: ${(err as Error).message}. No CV was charged — please try again in a moment.`,
+        },
+        { status: 502 },
+      );
+    }
+    const metadataURI = bgipfsGatewayUrl(metadataCid);
+    mintLog(reqId, wallet, "metadata_pinned", { cid: metadataCid, elapsedMs: Date.now() - t0 });
+
+    // --- Simulate the mint (still before CV charge, catches on-chain reverts cheap) ---
+    try {
+      await publicClient.simulateContract({
+        account: relayerAccount.address,
+        address: CLAWDPFP_ADDRESS,
+        abi: CLAWDPFP_ABI,
+        functionName: "mint",
+        args: [wallet as `0x${string}`, metadataURI],
+      });
+    } catch (err) {
+      mintLog(reqId, wallet, "simulate_reverted", { msg: (err as Error).message });
+      decrementRateLimit(wallet);
+      return NextResponse.json(
+        {
+          error: `Mint simulation failed: ${(err as Error).message}. No CV was charged — please try again shortly.`,
+        },
+        { status: 502 },
+      );
+    }
+    mintLog(reqId, wallet, "simulated", { elapsedMs: Date.now() - t0 });
+
+    // --- Charge CV (tightly coupled to tx submission now) ---
     // We intentionally DO NOT pre-verify the signature ourselves. ERC-1271
     // smart wallets (Coinbase Smart Wallet, many Safe configs) mix chain_id
     // into their signing domain, so a sig produced while the dapp is on
@@ -292,86 +369,12 @@ export async function POST(request: NextRequest) {
 
     // From this point on we've taken the user's CV. Any failure needs to be
     // logged so it can be reconciled manually (larv.ai doesn't support
-    // programmatic refunds). We still report a graceful error to the user.
+    // programmatic refunds). Should only fire now for tx-submission or on-
+    // chain-revert failures — pin/sim failures return early above.
     const logCvCharged = (detail: string) =>
       console.error(
         `[MINT_RECONCILE] wallet=${wallet} charged=${MINT_CV_COST} CV but ${detail}. Manual refund required.`,
       );
-
-    // --- Pin image to BGIPFS ---
-    let imageCid: string;
-    try {
-      const upload = await bgipfsAddBytes(
-        imageBuffer,
-        `clawd-pfp.${imageContentType.split("/")[1] || "png"}`,
-        imageContentType,
-      );
-      imageCid = upload.cid;
-    } catch (err) {
-      mintLog(reqId, wallet, "ipfs_image_failed", { msg: (err as Error).message });
-      logCvCharged(`BGIPFS image upload failed: ${(err as Error).message}`);
-      return NextResponse.json(
-        {
-          error: "Image pinning failed after CV was charged. Please contact support for a refund.",
-          reconcile: { wallet, amount: MINT_CV_COST },
-        },
-        { status: 502 },
-      );
-    }
-    mintLog(reqId, wallet, "image_pinned", { cid: imageCid, bytes: imageBuffer.length, elapsedMs: Date.now() - t0 });
-
-    // --- Build + pin metadata JSON ---
-    const imageGatewayUrl = bgipfsGatewayUrl(imageCid);
-    const metadataName = predictedTokenId !== null ? `CLAWD PFP #${predictedTokenId.toString()}` : "CLAWD PFP";
-    const metadata = {
-      name: metadataName,
-      description: sanitizedPrompt,
-      image: imageGatewayUrl,
-      external_url: "https://leftclaw.services",
-      attributes: [
-        { trait_type: "Prompt", value: sanitizedPrompt },
-        { trait_type: "Minted By", value: wallet },
-      ],
-    };
-    let metadataCid: string;
-    try {
-      const upload = await bgipfsAddJson(metadata, "metadata.json");
-      metadataCid = upload.cid;
-    } catch (err) {
-      mintLog(reqId, wallet, "ipfs_metadata_failed", { msg: (err as Error).message });
-      logCvCharged(`BGIPFS metadata upload failed: ${(err as Error).message}`);
-      return NextResponse.json(
-        {
-          error: "Metadata pinning failed after CV was charged. Please contact support for a refund.",
-          reconcile: { wallet, amount: MINT_CV_COST, imageCid },
-        },
-        { status: 502 },
-      );
-    }
-    const metadataURI = bgipfsGatewayUrl(metadataCid);
-    mintLog(reqId, wallet, "metadata_pinned", { cid: metadataCid, elapsedMs: Date.now() - t0 });
-
-    // --- Simulate the mint before sending ---
-    try {
-      await publicClient.simulateContract({
-        account: relayerAccount.address,
-        address: CLAWDPFP_ADDRESS,
-        abi: CLAWDPFP_ABI,
-        functionName: "mint",
-        args: [wallet as `0x${string}`, metadataURI],
-      });
-    } catch (err) {
-      mintLog(reqId, wallet, "simulate_reverted", { msg: (err as Error).message });
-      logCvCharged(`mint simulation reverted: ${(err as Error).message}`);
-      return NextResponse.json(
-        {
-          error: "Mint simulation failed. Your CV has been charged — please contact support.",
-          reconcile: { wallet, amount: MINT_CV_COST, imageCid, metadataCid },
-        },
-        { status: 502 },
-      );
-    }
-    mintLog(reqId, wallet, "simulated", { elapsedMs: Date.now() - t0 });
 
     // --- Send mint tx from relayer ---
     let txHash: `0x${string}`;
